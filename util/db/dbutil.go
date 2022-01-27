@@ -358,6 +358,8 @@ func URI(filename string, readOnly bool, memory bool) string {
 	if memory {
 		uri += "&mode=memory"
 		uri += "&cache=shared"
+	} else if readOnly {
+		uri += "&mode=ro" // mode can be one of ro, rw, rwc, or memory
 	}
 	return uri
 }
