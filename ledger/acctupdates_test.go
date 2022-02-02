@@ -691,6 +691,10 @@ func TestLargeAccountCountCatchpointGeneration(t *testing.T) {
 		t.Skip("This test is too slow on ARM and causes travis builds to time out")
 	}
 
+	// The next operations are heavy on the memory.
+	// Garbage collection helps prevent trashing
+	runtime.GC()
+
 	// create new protocol version, which has lower lookback
 	testProtocolVersion := protocol.ConsensusVersion("test-protocol-TestLargeAccountCountCatchpointGeneration")
 	protoParams := config.Consensus[protocol.ConsensusCurrentVersion]
@@ -1313,6 +1317,10 @@ func TestCompactDeltas(t *testing.T) {
 func TestAcctUpdatesCachesInitialization(t *testing.T) {
 	partitiontest.PartitionTest(t)
 
+	// The next operations are heavy on the memory.
+	// Garbage collection helps prevent trashing
+	runtime.GC()
+	
 	protocolVersion := protocol.ConsensusCurrentVersion
 	proto := config.Consensus[protocolVersion]
 
