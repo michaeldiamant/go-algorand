@@ -32,6 +32,7 @@ import sys
 import tempfile
 import time
 import threading
+from enum import Enum
 
 # pip install py-algorand-sdk
 import algosdk
@@ -43,6 +44,139 @@ repodir =  os.path.join(scriptdir, "..", "..")
 
 # less than 16kB of log we show the whole thing, otherwise the last 16kB
 LOG_WHOLE_CUTOFF = 1024 * 16
+
+class EnvironmentCreator(Enum):
+    Harness = 1
+    Sandbox = 2
+
+class RunSet:
+    def __init__(self, env, ec: EnvironmentCreator):
+        self.env = env
+        self.threads = {}
+        self.procs = {}
+        self.ok = True
+        self.lock = threading.Lock()
+        self.terminated = None
+        self.killthread = None
+        self.kmd = None
+        self.algod = None
+        self.pubw = None
+        self.maxpubaddr = None
+        self.errors = []
+        self.statuses = []
+        self.environmentCreator = ec
+        return
+
+    def is_ok(self):
+        with self.lock:
+            return self.ok
+
+    def connect(self):
+        with self.lock:
+            self._connect()
+            return self.algod, self.kmd
+
+    def _connect(self):
+        if self.algod and self.kmd:
+            return
+
+        # should run from inside self.lock
+        algodata = self.env['ALGORAND_DATA']
+
+        if self.environmentCreator == EnvironmentCreator.Harness:
+            xrun(['goal', 'kmd', 'start', '-t', '3600','-d', algodata], env=self.env, timeout=5)
+            self.kmd = openkmd(algodata)
+            self.algod = openalgod(algodata)
+        elif self.environmentCreator == EnvironmentCreator.Sandbox:
+            token = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            self.kmd = algosdk.kmd.KMDClient(token, 'http://localhost:4002')
+            self.algod = algosdk.algod.AlgodClient(token, 'http://localhost:4001')
+
+    def get_pub_wallet(self):
+        with self.lock:
+            self._connect()
+            if not (self.pubw and self.maxpubaddr):
+                # find private test node public wallet and its richest account
+                wallets = self.kmd.list_wallets()
+                pubwid = None
+                for xw in wallets:
+                    if xw['name'] == 'unencrypted-default-wallet':
+                        pubwid = xw['id']
+                pubw = self.kmd.init_wallet_handle(pubwid, '')
+                pubaddrs = self.kmd.list_keys(pubw)
+                pubbalances = []
+                maxamount = 0
+                maxpubaddr = None
+                for pa in pubaddrs:
+                    pai = self.algod.account_info(pa)
+                    if pai['amount'] > maxamount:
+                        maxamount = pai['amount']
+                        maxpubaddr = pai['address']
+                self.pubw = pubw
+                self.maxpubaddr = maxpubaddr
+            return self.pubw, self.maxpubaddr
+
+    def start(self, scriptname, timeout):
+        with self.lock:
+            if not self.ok:
+                return
+        t = threading.Thread(target=script_thread, args=(self, scriptname, timeout))
+        t.start()
+        with self.lock:
+            self.threads[scriptname] = t
+
+    def running(self, scriptname, p):
+        with self.lock:
+            self.procs[scriptname] = p
+
+    def done(self, scriptname, ok, seconds):
+        with self.lock:
+            self.statuses.append( {'script':scriptname, 'ok':ok, 'seconds':seconds} )
+            if not ok:
+                self.errors.append('{} failed'.format(scriptname))
+            self.threads.pop(scriptname, None)
+            self.procs.pop(scriptname, None)
+            self.ok = self.ok and ok
+            if not self.ok:
+                self._terminate()
+                if self.killthread is None:
+                    self.killthread = threading.Thread(target=killthread, args=(self,), daemon=True)
+                    self.killthread.start()
+
+    def _terminate(self):
+        # run from inside self.lock
+        if self.terminated:
+            return
+        self.terminated = time.time()
+        for p in self.procs.values():
+            p.terminate()
+
+    def kill(self):
+        with self.lock:
+            for p in self.procs.values():
+                p.kill()
+        return
+
+    def wait(self, timeout):
+        now = time.time()
+        endt = now + timeout
+        while now < endt:
+            waitt = None
+            with self.lock:
+                for t in self.threads.values():
+                    waitt = t
+                    break
+            if waitt is None:
+                break
+            now = time.time()
+            if now >= endt:
+                break
+            waitt.join(timeout=endt - now)
+            now = time.time()
+        if now >= endt:
+            with self.lock:
+                self.ok = False
+                self._terminate()
 
 def openkmd(algodata):
     kmdnetpath = sorted(glob.glob(os.path.join(algodata,'kmd-*','kmd.net')))[-1]
@@ -98,7 +232,7 @@ def create_kmd_config_with_unsafe_scrypt(working_dir):
 
 
 
-def _script_thread_inner(runset, scriptname, timeout):
+def _script_thread_inner(runset: RunSet, scriptname, timeout):
     start = time.time()
     algod, kmd = runset.connect()
     pubw, maxpubaddr = runset.get_pub_wallet()
@@ -191,130 +325,6 @@ def killthread(runset):
     time.sleep(5)
     runset.kill()
     return
-
-class RunSet:
-    def __init__(self, env):
-        self.env = env
-        self.threads = {}
-        self.procs = {}
-        self.ok = True
-        self.lock = threading.Lock()
-        self.terminated = None
-        self.killthread = None
-        self.kmd = None
-        self.algod = None
-        self.pubw = None
-        self.maxpubaddr = None
-        self.errors = []
-        self.statuses = []
-        return
-
-    def is_ok(self):
-        with self.lock:
-            return self.ok
-
-    def connect(self):
-        with self.lock:
-            self._connect()
-            return self.algod, self.kmd
-
-    def _connect(self):
-        if self.algod and self.kmd:
-            return
-
-        # should run from inside self.lock
-        algodata = self.env['ALGORAND_DATA']
-
-        xrun(['goal', 'kmd', 'start', '-t', '3600','-d', algodata], env=self.env, timeout=5)
-        self.kmd = openkmd(algodata)
-        self.algod = openalgod(algodata)
-
-    def get_pub_wallet(self):
-        with self.lock:
-            self._connect()
-            if not (self.pubw and self.maxpubaddr):
-                # find private test node public wallet and its richest account
-                wallets = self.kmd.list_wallets()
-                pubwid = None
-                for xw in wallets:
-                    if xw['name'] == 'unencrypted-default-wallet':
-                        pubwid = xw['id']
-                pubw = self.kmd.init_wallet_handle(pubwid, '')
-                pubaddrs = self.kmd.list_keys(pubw)
-                pubbalances = []
-                maxamount = 0
-                maxpubaddr = None
-                for pa in pubaddrs:
-                    pai = self.algod.account_info(pa)
-                    if pai['amount'] > maxamount:
-                        maxamount = pai['amount']
-                        maxpubaddr = pai['address']
-                self.pubw = pubw
-                self.maxpubaddr = maxpubaddr
-            return self.pubw, self.maxpubaddr
-
-    def start(self, scriptname, timeout):
-        with self.lock:
-            if not self.ok:
-                return
-        t = threading.Thread(target=script_thread, args=(self, scriptname, timeout))
-        t.start()
-        with self.lock:
-            self.threads[scriptname] = t
-
-    def running(self, scriptname, p):
-        with self.lock:
-            self.procs[scriptname] = p
-
-    def done(self, scriptname, ok, seconds):
-        with self.lock:
-            self.statuses.append( {'script':scriptname, 'ok':ok, 'seconds':seconds} )
-            if not ok:
-                self.errors.append('{} failed'.format(scriptname))
-            self.threads.pop(scriptname, None)
-            self.procs.pop(scriptname, None)
-            self.ok = self.ok and ok
-            if not self.ok:
-                self._terminate()
-                if self.killthread is None:
-                    self.killthread = threading.Thread(target=killthread, args=(self,), daemon=True)
-                    self.killthread.start()
-
-    def _terminate(self):
-        # run from inside self.lock
-        if self.terminated:
-            return
-        self.terminated = time.time()
-        for p in self.procs.values():
-            p.terminate()
-
-    def kill(self):
-        with self.lock:
-            for p in self.procs.values():
-                p.kill()
-        return
-
-    def wait(self, timeout):
-        now = time.time()
-        endt = now + timeout
-        while now < endt:
-            waitt = None
-            with self.lock:
-                for t in self.threads.values():
-                    waitt = t
-                    break
-            if waitt is None:
-                break
-            now = time.time()
-            if now >= endt:
-                break
-            waitt.join(timeout=endt - now)
-            now = time.time()
-        if now >= endt:
-            with self.lock:
-                self.ok = False
-                self._terminate()
-
 
 # 'network stop' and 'network delete' are also tested and used as cleanup procedures
 # so it re-raises exception in 'test' mode
@@ -409,8 +419,10 @@ def main():
     ap.add_argument('--verbose', default=False, action='store_true')
     ap.add_argument('--version', default="Future")
     ap.add_argument('--unsafe_scrypt', default=False, action='store_true', help="allows kmd to run with unsafe scrypt attribute. This will speed up tests time")
-    
+
     args = ap.parse_args()
+
+    ec = EnvironmentCreator.Sandbox
 
     if args.verbose:
         logging.basicConfig(format=_logging_format, datefmt=_logging_datefmt, level=logging.DEBUG)
@@ -436,22 +448,26 @@ def main():
     env['NETDIR'] = netdir
 
     retcode = 0
-    capv = args.version.capitalize()
-    xrun(['goal', 'network', 'create', '-r', netdir, '-n', 'tbd', '-t', os.path.join(repodir, f'test/testdata/nettemplates/TwoNodes50Each{capv}.json')], timeout=90)
-    xrun(['goal', 'network', 'start', '-r', netdir], timeout=90)
-    atexit.register(goal_network_stop, netdir, env)
 
-    env['ALGORAND_DATA'] = os.path.join(netdir, 'Node')
-    env['ALGORAND_DATA2'] = os.path.join(netdir, 'Primary')
+    if ec == EnvironmentCreator.Harness:
+        capv = args.version.capitalize()
+        xrun(['goal', 'network', 'create', '-r', netdir, '-n', 'tbd', '-t', os.path.join(repodir, f'test/testdata/nettemplates/TwoNodes50Each{capv}.json')], timeout=90)
+        xrun(['goal', 'network', 'start', '-r', netdir], timeout=90)
+        atexit.register(goal_network_stop, netdir, env)
 
-    if args.unsafe_scrypt:
-        create_kmd_config_with_unsafe_scrypt(env['ALGORAND_DATA'])
-        create_kmd_config_with_unsafe_scrypt(env['ALGORAND_DATA2'])
+        env['ALGORAND_DATA'] = os.path.join(netdir, 'Node')
+        env['ALGORAND_DATA2'] = os.path.join(netdir, 'Primary')
 
-    xrun(['goal', '-v'], env=env, timeout=5)
-    xrun(['goal', 'node', 'status'], env=env, timeout=5)
+        if args.unsafe_scrypt:
+            create_kmd_config_with_unsafe_scrypt(env['ALGORAND_DATA'])
+            create_kmd_config_with_unsafe_scrypt(env['ALGORAND_DATA2'])
 
-    rs = RunSet(env)
+        xrun(['goal', '-v'], env=env, timeout=5)
+        xrun(['goal', 'node', 'status'], env=env, timeout=5)
+    elif ec == EnvironmentCreator.Sandbox:
+        env['ALGORAND_DATA'] = "/tmp/algod-test"
+
+    rs = RunSet(env, ec)
     for scriptname in args.scripts:
         rs.start(os.path.abspath(scriptname), args.timeout-10)
     rs.wait(args.timeout)
@@ -466,10 +482,11 @@ def main():
         os.environ['ALGORAND_DATA'] = env['ALGORAND_DATA']
         os.system(os.environ['SHELL'])
 
-    # ensure 'network stop' and 'network delete' also make they job
-    goal_network_stop(netdir, env, normal_cleanup=True)
-    if not args.keep_temps:
-        goal_network_delete(netdir, normal_cleanup=True)
+    if ec == EnvironmentCreator.Harness:
+        # ensure 'network stop' and 'network delete' also make they job
+        goal_network_stop(netdir, env, normal_cleanup=True)
+        if not args.keep_temps:
+            goal_network_delete(netdir, normal_cleanup=True)
 
     return retcode
 
