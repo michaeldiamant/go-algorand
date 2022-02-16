@@ -960,7 +960,7 @@ func (eval *BlockEvaluator) applyTransaction(tx transactions.Transaction, balanc
 		}
 
 	default:
-		err = fmt.Errorf("Unknown transaction type %v", tx.Type)
+		err = fmt.Errorf("unknown transaction type %v", tx.Type)
 	}
 
 	// Record first, so that details can all be used in logic evaluation, even
@@ -989,7 +989,7 @@ func (eval *BlockEvaluator) applyTransaction(tx transactions.Transaction, balanc
 
 // compactCertVotersAndTotal returns the expected values of CompactCertVoters
 // and CompactCertVotersTotal for a block.
-func (eval *BlockEvaluator) compactCertVotersAndTotal() (root crypto.Digest, total basics.MicroAlgos, err error) {
+func (eval *BlockEvaluator) compactCertVotersAndTotal() (root crypto.GenericDigest, total basics.MicroAlgos, err error) {
 	if eval.proto.CompactCertRounds == 0 {
 		return
 	}
@@ -1081,7 +1081,7 @@ func (eval *BlockEvaluator) endOfBlock() error {
 		if err != nil {
 			return err
 		}
-		if eval.block.CompactCert[protocol.CompactCertBasic].CompactCertVoters != expectedVoters {
+		if !eval.block.CompactCert[protocol.CompactCertBasic].CompactCertVoters.IsEqual(expectedVoters) {
 			return fmt.Errorf("CompactCertVoters wrong: %v != %v", eval.block.CompactCert[protocol.CompactCertBasic].CompactCertVoters, expectedVoters)
 		}
 		if eval.block.CompactCert[protocol.CompactCertBasic].CompactCertVotersTotal != expectedVotersWeight {
@@ -1299,12 +1299,12 @@ func (validator *evalTxValidator) run() {
 	}
 }
 
-// Eval is the main evaluator entrypoint.
+// Eval is the main evaluator entrypoint (in addition to StartEvaluator)
 // used by Ledger.Validate() Ledger.AddBlock() Ledger.trackerEvalVerified()(accountUpdates.loadFromDisk())
 //
-// Validate: Eval(ctx, l, blk, true, txcache, executionPool, true)
-// AddBlock: Eval(context.Background(), l, blk, false, txcache, nil, true)
-// tracker:  Eval(context.Background(), l, blk, false, txcache, nil, false)
+// Validate: Eval(ctx, l, blk, true, txcache, executionPool)
+// AddBlock: Eval(context.Background(), l, blk, false, txcache, nil)
+// tracker:  Eval(context.Background(), l, blk, false, txcache, nil)
 func Eval(ctx context.Context, l LedgerForEvaluator, blk bookkeeping.Block, validate bool, txcache verify.VerifiedTransactionCache, executionPool execpool.BacklogPool) (ledgercore.StateDelta, error) {
 	eval, err := StartEvaluator(l, blk.BlockHeader,
 		EvaluatorOptions{
