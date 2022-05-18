@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Pre-reqs
-	run: |
+        run: |
           sudo apt update -y
           sudo apt install -y cpufrequtils
           sudo cpufreq-set -f 2Ghz
