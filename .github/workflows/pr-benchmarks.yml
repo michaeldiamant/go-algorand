@@ -7,8 +7,13 @@ jobs:
     name: Performance regression check
     runs-on: ubuntu-latest
     steps:
+      - name: Pre-reqs
+	run: |
+          sudo apt update -y
+          sudo apt install -y cpufrequtils
+          sudo cpufreq-set -f 2Ghz
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Install go
         uses: actions/setup-go@v1
         with:
