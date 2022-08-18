@@ -526,7 +526,7 @@ jobs:
         type: string
     executor: << parameters.platform >>_medium
     working_directory: << pipeline.parameters.build_dir >>/project
-    parallelism: 16
+    parallelism: 8
     steps:
       - prepare_build_dir
       - prepare_go
