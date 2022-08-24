@@ -17,7 +17,7 @@ parameters:
     default: "/tmp/build_test_results"
   valid_nightly_branch:
     type: string
-    default: /hotfix\/.*/
+    default: "fix_nightly_build"
 
 executors:
   amd64_medium:
