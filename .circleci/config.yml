@@ -173,7 +173,7 @@ workflows:
           filters:
             branches:
               only:
-                - /rel\/.*/
+                - fix_nightly_build_test
           context:
             - slack-secrets
             - aws-secrets
