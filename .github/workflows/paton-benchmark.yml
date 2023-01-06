@@ -33,7 +33,7 @@ jobs:
       - run: ./scripts/travis/before_build.sh # Installs libsodium.
         shell: bash
       - name: Run benchmark
-        run: ./scripts/paton.sh --git-repo ${{ github.repository }} --alert-threshold-pct 10 --test-cmd "-run XXX -benchtime 5s -bench BenchmarkControl ./data/transactions/logic"
+        run: ./scripts/paton.sh --git-repo ${{ github.repository }} --alert-threshold-pct 5 --test-cmd "-run XXX -benchtime 30s -bench BenchmarkUintMath ./data/transactions/logic"
         shell: bash
       - uses: actions/upload-artifact@v3
         with:
